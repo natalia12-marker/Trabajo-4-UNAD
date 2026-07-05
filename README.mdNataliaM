@@ -1,4 +1,5 @@
-basicConfig(
+import logging 
+logging.basicConfig(
     filename="sistema_errores.log",
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -12,13 +13,13 @@ class ParametroInvalidoError(ServicioError):
     """Se lanza cuando los días, horas o valores son negativos o inválidos."""
     pass
 
-
+from abc import ABC 
 class Servicio(ABC):
     def __init__(self, nombre: str, precio_base: float):
         if precio_base < 0:
             raise ParametroInvalidoError("El precio base no puede ser negativo.")
         self._nombre = nombre         
-        Atributo protegido / encapsulado
+        #Atributo protegido / encapsulado
         self._precio_base = precio_base
 
     def nombre(self):
@@ -65,3 +66,60 @@ class AlquilerEquipo(Servicio):
 
     def obtener_descripcion(self) -> str:
         return f"Servicio: {self.nombre} (Equipo: {self.tipo_equipo})."
+import tkinter as tk
+from tkinter import messagebox 
+    
+    # Crear la ventana base
+
+# 1. Crear la ventana base
+ventana = tk.Tk()
+ventana.title("Sistema de Gestión de Servicios")
+ventana.geometry("400x400") 
+# Esto define el tamaño de la ventana 
+
+# 2. Crear los elementos visuales (Campos de texto)
+tk.Label(ventana, text="Precio Base ($):").pack(pady=5)
+entrada_precio = tk.Entry(ventana)
+entrada_precio.pack()
+
+tk.Label(ventana, text="Tiempo (Horas o Días):").pack(pady=5)
+entrada_tiempo = tk.Entry(ventana)
+entrada_tiempo.pack()
+
+tk.Label(ventana, text="Capacidad (Solo para Sala):").pack(pady=5)
+entrada_capacidad = tk.Entry(ventana)
+entrada_capacidad.pack()
+
+def procesar_formulario():
+    try:
+        # Tomamos los datos que el usuario escribió en las cajitas visuales
+        precio = float(entrada_precio.get())
+        horas = int(entrada_tiempo.get())
+        capacidad = int(entrada_capacidad.get())
+        
+        # INSTANCIAMOS TU CLASE (La que creaste en las fotos anteriores)
+        servicio = ReservaSala(precio_base=precio, capacidad=capacidad)
+        
+        # Ejecutamos tus métodos matemáticos
+        costo_final = servicio.calcular_costo(horas=horas)
+       
+       # Mostramos el resultado final en la etiqueta de la ventana
+        label_resultado.config(text=f"{descripcion}\nCosto Total: ${costo_final:.2f}", fg="green") 
+    except ValueError:
+        # Si el usuario escribe letras en vez de números
+     messagebox.showerror("Error de datos", "Por favor, ingresa solo números válidos.")
+        
+    except ParametroInvalidoError as e:
+        # AQUÍ CAPTURAS TU PROPIA EXCEPCIÓN (Si ponen números negativos)
+     label_resultado.config(text=f"Error: {e}", fg="red") 
+
+# 3. Crear el botón que ejecuta la función
+boton_calcular = tk.Button(ventana, text="Calcular Servicio", command=procesar_formulario)
+boton_calcular.pack(pady=20)
+
+# Etiqueta invisible abajo que se usará para mostrar el resultado final
+label_resultado = tk.Label(ventana, text="", font=("Arial", 11, "bold"))
+label_resultado.pack(pady=10)
+
+# 4. Mantener la ventana abierta esperando los clics del usuario
+ventana.mainloop()
