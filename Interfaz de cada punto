@@ -1,0 +1,981 @@
+Natalia Liceth Muñoz Cabezas 
+interfaz de cada punto 
+1) configuracion.py
+
+RAIZ_PROYECTO = Path(__file__).resolve().parent.parent
+
+# Carpetas del sistema
+DATA_DIR = RAIZ_PROYECTO / "data"
+ASSETS_DIR = RAIZ_PROYECTO / "assets"
+CONFIG_DIR = RAIZ_PROYECTO / "config"
+MODELS_DIR = RAIZ_PROYECTO / "models"
+VIEWS_DIR = RAIZ_PROYECTO / "views"
+CONTROLLERS_DIR = RAIZ_PROYECTO / "controllers"
+UTILS_DIR = RAIZ_PROYECTO / "utils"
+
+# Archivos de datos
+CLIENTES_FILE = DATA_DIR / "clientes.json"
+SERVICIOS_FILE = DATA_DIR / "servicios.json"
+RESERVAS_FILE = DATA_DIR / "reservas.json"
+LOG_FILE = DATA_DIR / "logs.txt"
+
+# INICIALIZACIÓN AUTOMÁTICA DEL ENTORNO
+
+
+def inicializar_entorno():
+    """Crea las carpetas y archivos base del proyecto si no existen."""
+    # Lista de todas las carpetas a crear
+    carpetas = [
+        DATA_DIR, ASSETS_DIR, CONFIG_DIR, 
+        MODELS_DIR, VIEWS_DIR, CONTROLLERS_DIR, UTILS_DIR
+    ]
+    
+    # Crear carpetas (exist_ok=True evita errores si ya existen)
+    for carpeta in carpetas:
+        carpeta.mkdir(parents=True, exist_ok=True)
+        
+    # Inicializar archivos JSON vacíos con una estructura válida `[]`
+    archivos_json = [CLIENTES_FILE, SERVICIOS_FILE, RESERVAS_FILE]
+    for archivo in archivos_json:
+        if not archivo.exists():
+            archivo.write_text("[]", encoding="utf-8")
+            
+    # Inicializar archivo de logs vacío
+    if not LOG_FILE.exists():
+        LOG_FILE.write_text("", encoding="utf-8")
+
+2) controlador_reservas.py
+
+
+Gestiona todas las operaciones relacionadas con las reservas.
+"""
+
+from config.configuracion import RESERVAS_FILE
+from models.reserva import Reserva
+from utils.almacenamiento import Almacenamiento
+from utils.logger import Logger
+
+
+class ControladorReservas:
+    """
+    Controlador encargado de administrar las reservas.
+    """
+
+    def __init__(self, controlador_clientes, controlador_servicios):
+        """
+        Inicializa el controlador de reservas.
+
+        Parameters
+        ----------
+        controlador_clientes: Controlador encargado de administrar clientes.
+        controlador_servicios: Controlador encargado de administrar servicios.
+        """
+        self._reservas = []
+        self._controlador_clientes = controlador_clientes
+        self._controlador_servicios = controlador_servicios
+        self.cargar()
+
+    def cargar(self):
+        """
+        Carga las reservas desde el archivo JSON.
+        """
+        datos = Almacenamiento.cargar_json(RESERVAS_FILE)
+        self._reservas.clear()
+
+        for reserva in datos:
+            cliente = self._controlador_clientes.buscar_cliente(reserva["cliente"])
+            servicio = self._controlador_servicios.buscar_servicio(reserva["servicio"])
+
+            if cliente is None or servicio is None:
+                continue
+
+            nueva_reserva = Reserva(
+                reserva["codigo"],
+                cliente,
+                servicio,
+                reserva["fecha"],
+                reserva.get("estado", "Activa")  # Asegúrate de que el __init__ de Reserva acepte 'estado'
+            )
+            self._reservas.append(nueva_reserva)
+
+    def convertir_a_diccionario(self, reserva):
+        """
+        Convierte una reserva en un diccionario para su almacenamiento.
+        """
+        return {
+            "codigo": reserva.codigo,
+            "cliente": reserva.cliente.cedula,
+            "servicio": reserva.servicio.codigo,
+            "fecha": reserva.fecha,
+            "estado": reserva.estado
+        }
+
+    def guardar(self):
+        """
+        Guarda todas las reservas en el archivo JSON.
+        """
+        datos = [self.convertir_a_diccionario(r) for r in self._reservas]
+        Almacenamiento.guardar_json(RESERVAS_FILE, datos)
+
+    def registrar_reserva(self, codigo, cedula_cliente, codigo_servicio, fecha):
+        """
+        Registra una nueva reserva en el sistema.
+        """
+        if self.buscar_reserva(codigo):
+            raise ValueError("Ya existe una reserva con ese código.")
+
+        cliente = self._controlador_clientes.buscar_cliente(cedula_cliente)
+        if cliente is None:
+            raise ValueError("Cliente no encontrado.")
+
+        servicio = self._controlador_servicios.buscar_servicio(codigo_servicio)
+        if servicio is None:
+            raise ValueError("Servicio no encontrado.")
+
+        # Se crea con el estado inicial 
+        reserva = Reserva(codigo, cliente, servicio, fecha)
+        self._reservas.append(reserva)
+        self.guardar()
+        Logger.registrar("INFO", f"Reserva registrada: {codigo}")
+
+    def buscar_reserva(self, codigo):
+        """
+        Busca una reserva por su código.
+        """
+        for reserva in self._reservas:
+            if reserva.codigo == codigo:
+                return reserva
+        return None
+
+    def listar_reservas(self):
+        """
+        Devuelve todas las reservas.
+        """
+        return self._reservas
+
+    def cancelar_reserva(self, codigo):
+        """
+        Cancela una reserva cambiando su estado.
+        """
+        reserva = self.buscar_reserva(codigo)
+        if reserva is None:
+            raise ValueError("Reserva no encontrada.")
+
+        reserva.cancelar()
+        self.guardar()
+        Logger.registrar("INFO", f"Reserva cancelada: {codigo}")
+
+    def eliminar_reserva(self, codigo):
+        """
+        Elimina por completo una reserva del sistema.
+        """
+        reserva = self.buscar_reserva(codigo)
+        if reserva is None:
+            raise ValueError("Reserva no encontrada.")
+
+        self._reservas.remove(reserva)
+        self.guardar()
+        Logger.registrar("INFO", f"Reserva eliminada: {codigo}")
+3) controlador_clientes.py
+
+from config.configuracion import CLIENTES_FILE
+from models.cliente import Cliente
+from utils.almacenamiento import Almacenamiento
+from utils.logger import Logger
+
+
+class ControladorClientes:
+    """
+    Controlador encargado de administrar los clientes.
+    """
+
+    def __init__(self):
+        """
+        Inicializa el controlador cargando los clientes
+        almacenados en el archivo JSON.
+        """
+        self._clientes = []
+        self.cargar()
+
+    def cargar(self):
+        """
+        Carga los clientes desde el archivo JSON.
+        """
+        datos = Almacenamiento.cargar_json(CLIENTES_FILE)
+        self._clientes.clear()
+
+        for cliente in datos:
+            nuevo_cliente = Cliente(
+                cliente["nombre"],
+                cliente["telefono"],
+                cliente["correo"],
+                cliente["cedula"]
+            )
+            self._clientes.append(nuevo_cliente)
+
+    def convertir_a_diccionario(self, cliente):
+        """
+        Convierte un objeto Cliente en un diccionario.
+        """
+        return {
+            "nombre": cliente.nombre,
+            "telefono": cliente.telefono,
+            "correo": cliente.correo,
+            "cedula": cliente.cedula
+        }
+
+    def guardar(self):
+        """
+        Guarda todos los clientes en el archivo JSON.
+        """
+        datos = [self.convertir_a_diccionario(c) for c in self._clientes]
+        Almacenamiento.guardar_json(CLIENTES_FILE, datos)
+
+    def registrar_cliente(self, nombre, telefono, correo, cedula):
+        """
+        Registra un nuevo cliente.
+        """
+        if self.buscar_cliente(cedula) is not None:
+            raise ValueError("Ya existe un cliente con esa cédula.")
+
+        cliente = Cliente(nombre, telefono, correo, cedula)
+        self._clientes.append(cliente)
+        self.guardar()
+        Logger.registrar("INFO", f"Cliente registrado: {cedula}")
+
+    def buscar_cliente(self, cedula):
+        """
+        Busca un cliente por su cédula.
+        """
+        for cliente in self._clientes:
+            if cliente.cedula == cedula:
+                return cliente
+        return None
+
+    def listar_clientes(self):
+        """
+        Devuelve la lista de clientes.
+        """
+        return self._clientes
+
+    def actualizar_cliente(self, cedula, nombre, telefono, correo):
+        """
+        Actualiza la información de un cliente utilizando su interfaz pública.
+        """
+        cliente = self.buscar_cliente(cedula)
+        if cliente is None:
+            raise ValueError("Cliente no encontrado.")
+
+        # Modificación mediante setters públicos para respetar el encapsulamiento
+        cliente.nombre = nombre
+        cliente.telefono = telefono
+        cliente.correo = correo
+
+        self.guardar()
+        Logger.registrar("INFO", f"Cliente actualizado: {cedula}")
+
+    def eliminar_cliente(self, cedula):
+        """
+        Elimina un cliente.
+        """
+        cliente = self.buscar_cliente(cedula)
+        if cliente is None:
+            raise ValueError("Cliente no encontrado.")
+
+        self._clientes.remove(cliente)
+        self.guardar()
+        Logger.registrar("INFO", f"Cliente eliminado: {cedula}")
+# Ejecutar la preparación automáticamente al importar el módulo
+inicializar_entorno()
+
+4) controlador_servicios.py
+
+from config.configuracion import SERVICIOS_FILE
+from models.servicio import Servicio
+from utils.almacenamiento import Almacenamiento
+from utils.logger import Logger
+
+
+class ControladorServicios:
+    """
+    Controlador encargado de administrar los servicios.
+    """
+
+    def __init__(self):
+        """
+        Inicializa el controlador cargando los servicios
+        almacenados en el archivo JSON.
+        """
+        self._servicios = []
+        self.cargar()
+
+    def cargar(self):
+        """
+        Carga los servicios desde el archivo JSON.
+        """
+        datos = Almacenamiento.cargar_json(SERVICIOS_FILE)
+        self._servicios.clear()
+
+        for servicio in datos:
+            nuevo_servicio = Servicio(
+                servicio["codigo"],
+                servicio["nombre"],
+                servicio["precio"],
+                servicio["duracion"]
+            )
+            self._servicios.append(nuevo_servicio)
+
+    def convertir_a_diccionario(self, servicio):
+        """
+        Convierte un objeto Servicio en un diccionario.
+        """
+        return {
+            "codigo": servicio.codigo,
+            "nombre": servicio.nombre,
+            "precio": servicio.precio,
+            "duracion": servicio.duracion
+        }
+
+    def guardar(self):
+        """
+        Guarda todos los servicios en el archivo JSON.
+        """
+        datos = [self.convertir_a_diccionario(s) for s in self._servicios]
+        Almacenamiento.guardar_json(SERVICIOS_FILE, datos)
+
+    def registrar_servicio(self, codigo, nombre, precio, duracion):
+        """
+        Registra un nuevo servicio.
+        """
+        if self.buscar_servicio(codigo) is not None:
+            raise ValueError("Ya existe un servicio con ese código.")
+
+        servicio = Servicio(codigo, nombre, precio, duration=duracion)
+        self._servicios.append(servicio)
+        self.guardar()
+        Logger.registrar("INFO", f"Servicio registrado: {codigo}")
+
+    def buscar_servicio(self, codigo):
+        """
+        Busca un servicio por su código.
+        """
+        for servicio in self._servicios:
+            if servicio.codigo == codigo:
+                return servicio
+        return None
+
+    def listar_servicios(self):
+        """
+        Devuelve la lista de servicios.
+        """
+        return self._servicios
+
+    def actualizar_servicio(self, codigo, nombre, precio, duracion):
+        """
+        Actualiza la información de un servicio utilizando su interfaz pública.
+        """
+        servicio = self.buscar_servicio(codigo)
+        if servicio is None:
+            raise ValueError("Servicio no encontrado.")
+
+        # Modificación mediante setters públicos para respetar el encapsulamiento
+        servicio.nombre = nombre
+        servicio.precio = precio
+        servicio.duracion = duracion
+
+        self.guardar()
+        Logger.registrar("INFO", f"Servicio actualizado: {codigo}")
+
+    def eliminar_servicio(self, codigo):
+        """
+        Elimina un servicio.
+        """
+        servicio = self.buscar_servicio(codigo)
+        if servicio is None:
+            raise ValueError("Servicio no encontrado.")
+
+        self._servicios.remove(servicio)
+        self.guardar()
+        Logger.registrar("INFO", f"Servicio eliminado: {codigo}")
+5) cliente.py
+
+Define la clase Cliente que hereda las propiedades básicas de una Persona.
+
+
+from models.persona import Persona
+from utils.validaciones import Validaciones
+
+
+class Cliente(Persona):
+    """
+    Representa un cliente dentro del sistema integral.
+    """
+
+    def __init__(self, nombre, telefono, correo, cedula):
+        """
+        Inicializa un nuevo cliente validando su documento de identidad.
+        """
+        super().__init__(nombre, telefono, correo)
+
+        if not Validaciones.validar_cedula(cedula):
+            raise ValueError("La cédula solo puede contener números.")
+
+        self._cedula = cedula
+
+    @property
+    def cedula(self):
+        """
+        Obtiene la cédula del cliente (Atributo de solo lectura).
+        """
+        return self._cedula
+
+    def __str__(self):
+        """
+        Devuelve una representación en texto con los datos detallados del cliente.
+        """
+        return (
+            f"{super().__str__()}\n"
+            f"Cédula: {self.cedula}"
+        )
+
+
+6)persona.py
+
+
+Define la clase Persona, utilizada como clase base para
+las personas registradas en el sistema.
+
+from utils.validaciones import Validaciones
+
+
+class Persona:
+    """
+    Clase base que representa a una persona en el sistema.
+    """
+
+    def __init__(self, nombre, telefono, correo):
+        """
+        Inicializa una persona validando sus campos base.
+        """
+        if Validaciones.campo_vacio(nombre):
+            raise ValueError("El nombre no puede estar vacío.")
+
+        Validaciones.validar_telefono(telefono)
+        Validaciones.validar_correo(correo)
+
+        self._nombre = nombre
+        self._telefono = telefono
+        self._correo = correo
+
+    @property
+    def nombre(self):
+        """
+        Devuelve el nombre de la persona.
+        """
+        return self._nombre
+
+    @nombre.setter
+    def nombre(self, nuevo_nombre):
+        """
+        Modifica el nombre asegurando que no quede vacío.
+        """
+        if Validaciones.campo_vacio(nuevo_nombre):
+            raise ValueError("El nombre no puede estar vacío.")
+        self._nombre = nuevo_nombre
+
+    @property
+    def telefono(self):
+        """
+        Devuelve el teléfono de la persona.
+        """
+        return self._telefono
+
+    @telefono.setter
+    def telefono(self, nuevo_telefono):
+        """
+        Modifica el teléfono aplicando las validaciones del sistema.
+        """
+        Validaciones.validar_telefono(nuevo_telefono)
+        self._telefono = nuevo_telefono
+
+    @property
+    def correo(self):
+        """
+        Devuelve el correo electrónico de la persona.
+        """
+        return self._correo
+
+    @correo.setter
+    def correo(self, nuevo_correo):
+        """
+        Modifica el correo aplicando las validaciones del sistema.
+        """
+        Validaciones.validar_correo(nuevo_correo)
+        self._correo = nuevo_correo
+
+    def __str__(self):
+        """
+        Devuelve una representación en texto del objeto.
+        """
+        return (
+            f"Nombre: {self.nombre}\n"
+            f"Teléfono: {self.telefono}\n"
+            f"Correo: {self.correo}"
+        )
+7) Reserva
+
+from config.configuracion import inicializar_entorno
+from controlador_clientes import ControladorClientes
+from controlador_servicios import ControladorServicios
+from controlador_reservas import ControladorReservas
+from views.ventana_principal import VentanaPrincipal
+
+def main():
+    # 1. Asegurar que existan y archivos base
+    inicializar_entorno()
+
+    # 2. Instanciar la lógica de los controladores
+    ctrl_clientes = ControladorClientes()
+    ctrl_servicios = ControladorServicios()
+    ctrl_reservas = ControladorReservas(ctrl_clientes, ctrl_servicios)
+
+    # 3. Lanzar la interfaz Tkinter pasando los controladores
+    app = VentanaPrincipal(ctrl_clientes, ctrl_servicios, ctrl_reservas)
+    app.mainloop()
+
+if __name__ == "__main__":
+    main()
+8)servicio.py
+
+
+Define la clase Servicio con propiedades de lectura y escritura validadas.
+"""
+from utils.validaciones import Validaciones
+
+
+class Servicio:
+    """
+    Representa un servicio ofrecido por la empresa dentro del sistema integral.
+    """
+
+    def __init__(self, codigo, nombre, precio, duracion):
+        """
+        Inicializa un servicio ejecutando filtros estrictos de control de datos.
+        """
+        if Validaciones.campo_vacio(codigo):
+            raise ValueError("El código no puede estar vacío.")
+
+        if Validaciones.campo_vacio(nombre):
+            raise ValueError("El nombre no puede estar vacío.")
+
+        if precio <= 0:
+            raise ValueError("El precio debe ser mayor que cero.")
+
+        if duracion <= 0:
+            raise ValueError("La duración debe ser mayor que cero.")
+
+        self._codigo = codigo
+        self._nombre = nombre
+        self._precio = precio
+        self._duracion = duracion
+
+    @property
+    def codigo(self):
+        """Devuelve el código identificador único del servicio (Solo lectura)."""
+        return self._codigo
+
+    @property
+    def nombre(self):
+        """Devuelve el nombre descriptivo del servicio."""
+        return self._nombre
+
+    @nombre.setter
+    def nombre(self, nuevo_nombre):
+        """Modifica el nombre asegurando que no contenga una cadena vacía."""
+        if Validaciones.campo_vacio(nuevo_nombre):
+            raise ValueError("El nombre no puede estar vacío.")
+        self._nombre = nuevo_nombre
+
+    @property
+    def precio(self):
+        """Devuelve el valor comercial asignado al servicio."""
+        return self._precio
+
+    @precio.setter
+    def precio(self, nuevo_precio):
+        """Modifica el precio verificando que sea un valor financiero positivo."""
+        if nuevo_precio <= 0:
+            raise ValueError("El precio debe ser mayor que cero.")
+        self._precio = nuevo_precio
+
+    @property
+    def duracion(self):
+        """Devuelve la extensión de tiempo estimada del servicio en minutos."""
+        return self._duracion
+
+    @duracion.setter
+    def duracion(self, nueva_duracion):
+        """Modifica la duración verificando que sea un intervalo de tiempo válido."""
+        if nueva_duracion <= 0:
+            raise ValueError("La duración debe ser mayor que cero.")
+        self._duracion = nueva_duracion
+
+    def __str__(self):
+        """
+        Devuelve una ficha técnica en texto con los atributos del servicio formateados.
+        """
+        return (
+            f"Código: {self.codigo}\n"
+            f"Nombre: {self.nombre}\n"
+            f"Precio: ${self.precio:.2f}\n"
+            f"Duración: {self.duracion} minutos"
+        )
+
+9)almacenamiento.py
+
+
+import json
+from config.configuracion import (
+    DATA_DIR,
+    ASSETS_DIR,
+    CONFIG_DIR,
+    MODELS_DIR,
+    VIEWS_DIR,
+    CONTROLLERS_DIR,
+    UTILS_DIR,
+    CLIENTES_FILE,
+    SERVICIOS_FILE,
+    RESERVAS_FILE,
+    LOG_FILE,
+)
+
+class Almacenamiento:
+    """
+    Gestiona todas las operaciones relacionadas con los archivos
+    utilizados por el sistema.
+    """
+
+    @staticmethod
+    def crear_estructura():
+        """
+        Crea automáticamente la estructura mínima del proyecto si no existe.
+        Sustituye la inicialización directa en configuración para evitar ciclos.
+        """
+        # Lista de todas las carpetas necesarias en la raíz del proyecto
+        carpetas = [
+            DATA_DIR, ASSETS_DIR, CONFIG_DIR, 
+            MODELS_DIR, VIEWS_DIR, CONTROLLERS_DIR, UTILS_DIR
+        ]
+        
+        for carpeta in carpetas:
+            carpeta.mkdir(parents=True, exist_ok=True)
+        
+        # Archivos de datos que deben inicializarse como listas JSON vacías
+        archivos_json = [CLIENTES_FILE, SERVICIOS_FILE, RESERVAS_FILE]
+
+        for archivo in archivos_json:
+            # Corrección: Validar la existencia de cada archivo individual usando .exists()
+            if not archivo.exists():
+                with open(archivo, "w", encoding="utf-8") as f:
+                    json.dump([], f, indent=4)
+
+        # Crear archivo de logs vacío si no existe
+        if not LOG_FILE.exists():
+            LOG_FILE.touch()
+
+    @staticmethod
+    def cargar_json(ruta):
+        """
+        Lee un archivo JSON y devuelve su contenido. Si el archivo no existe
+        o está corrupto, retorna una lista vacía.
+        """
+        if not ruta.exists():
+            return []
+        
+        try:
+            with open(ruta, "r", encoding="utf-8") as archivo:
+                return json.load(archivo)
+        except json.JSONDecodeError:
+            # Previene caídas del sistema si el archivo JSON se edita mal a mano
+            return []
+        
+    @staticmethod
+    def guardar_json(ruta, datos):
+        """
+        Guarda los datos proporcionados en un archivo JSON estructurado.
+        """
+        with open(ruta, "w", encoding="utf-8") as archivo:
+            json.dump(
+                datos,
+                archivo,
+                indent=4,
+                ensure_ascii=False  # Permite guardar tildes y eñes de forma nativa
+            )
+10)excepciones.py
+
+Contiene todas las excepciones personalizadas que podrían ocurrir en el sistema.
+Este manejo permitirá identificar más fácilmente dónde se encuentran los errores.
+
+Autor: Jhohan Sebastian Ibarra Sánchez
+Curso: Programación
+Proyecto: Sistema Integral
+"""
+
+class SistemaError(Exception):
+    """
+    Excepción base de todo el sistema integral.
+    """
+
+    def __init__(self, mensaje, operacion=None):
+        """
+        Inicializa la excepción almacenando la descripción y el contexto operativo.
+        """
+        self.mensaje = mensaje
+        self.operacion = operacion
+        super().__init__(mensaje)
+
+    def __str__(self):
+        """Formatea el error incluyendo la operación si está disponible."""
+        if self.operacion:
+            return f"[{self.operacion}] Error: {self.mensaje}"
+        return self.mensaje
+
+
+
+# EXCEPCIONES DE CLIENTES
+
+class ClienteError(SistemaError):
+    """Excepción base para todos los errores relacionados con clientes."""
+    pass
+
+class ClienteNoEncontradoError(ClienteError):
+    """Se produce cuando se busca una cédula que no existe en el sistema."""
+    pass
+
+class ClienteDuplicadoError(ClienteError):
+    """Se produce cuando se intenta registrar un cliente cuya cédula ya existe."""
+    pass
+
+class CorreoInvalidoError(ClienteError):
+    """Se produce cuando el correo electrónico tiene un formato inválido."""
+    pass
+
+class TelefonoInvalidoError(ClienteError):
+    """Se produce cuando el teléfono contiene caracteres inválidos."""
+    pass
+
+class CedulaInvalidaError(ClienteError):
+    """Se produce cuando el documento de identidad no cumple el patrón numérico."""
+    pass
+
+
+# EXCEPCIONES DE SERVICIOS
+
+class ServicioError(SistemaError):
+    """Excepción base para los errores relacionados con servicios."""
+    pass
+
+class ServicioNoEncontradoError(ServicioError):
+    """Se produce al buscar un código de servicio inexistente."""
+    pass
+
+class ServicioDuplicadoError(ServicioError):
+    """Se produce si el código identificador del servicio ya fue registrado."""
+    pass
+
+class DuracionInvalidaError(ServicioError):
+    """Se produce si la duración del servicio es menor o igual a cero (Corregido de sección)."""
+    pass
+
+class PrecioInvalidoError(ServicioError):
+    """Se produce si el valor monetario asignado al servicio es menor o igual a cero."""
+    pass
+
+
+# EXCEPCIONES DE RESERVAS
+
+class ReservaError(SistemaError):
+    """Excepción base para los errores relacionados con las reservas."""
+    pass
+
+class ReservaNoEncontradaError(ReservaError):
+    """Se produce al buscar un código de reserva inexistente."""
+    pass
+
+class ReservaDuplicadaError(ReservaError):
+    """Se produce si el código identificador de la reserva ya está ocupado."""
+    pass
+
+class ReservaCanceladaError(ReservaError):
+    """Se produce cuando se intenta operar sobre una reserva que ya fue cancelada."""
+    pass
+
+11) generador_codigos.py
+
+Genera códigos correlativos únicos para los registros del sistema.
+Previene la duplicidad de llaves primarias en archivos JSON.
+"""
+
+from config.configuracion import (
+    SERVICIOS_FILE,
+    RESERVAS_FILE
+)
+from utils.almacenamiento import Almacenamiento
+
+
+class GeneradorCodigos:
+    """
+    Clase utilitaria con métodos estáticos para la creación de folios consecutivos.
+    """
+
+    @staticmethod
+    def _generar_codigo(archivo, prefijo):
+        """
+        Analiza el archivo JSON para calcular el consecutivo numérico más alto.
+        
+        Inspecciona todo el conjunto de datos para evitar colisiones lógicas
+        si los registros previos fueron eliminados, alterados o desordenados.
+        """
+        datos = Almacenamiento.cargar_json(archivo)
+
+        # Si el archivo no contiene registros, inicializa la secuencia base
+        if not datos:
+            return f"{prefijo}001"
+
+        valores_numericos = []
+        
+        for item in datos:
+            codigo_str = item.get("codigo", "")
+            if codigo_str.startswith(prefijo):
+                try:
+                    # Extrae la sección numérica (ej: "S002" -> 2)
+                    numero_extraido = int(codigo_str.replace(prefijo, ""))
+                    valores_numericos.append(numero_extraido)
+                except (ValueError, TypeError):
+                    continue  # Protege el flujo si hay datos corruptos en el JSON
+
+        # Si no se encontraron códigos con el prefijo válido, inicia la secuencia
+        if not valores_numericos:
+            return f"{prefijo}001"
+
+        # Incrementa una unidad al valor máximo encontrado en el historial
+        siguiente_numero = max(valores_numericos) + 1
+
+        # Mantiene el formato rígido con ceros a la izquierda (ej: R005)
+        return f"{prefijo}{siguiente_numero:03d}"
+
+    @staticmethod
+    def generar_servicio():
+        """
+        Genera un código correlativo único para un nuevo servicio (Ej: S001).
+        """
+        return GeneradorCodigos._generar_codigo(SERVICIOS_FILE, "S")
+
+    @staticmethod
+    def generar_reserva():
+        """
+12) logger.py
+
+Gestiona el registro secuencial de eventos y auditoría del sistema.
+"""
+
+from datetime import datetime
+from config.configuracion import LOG_FILE
+
+
+class Logger:
+    """
+    Registra de forma persistente los eventos operativos y errores del sistema.
+    """
+
+    @staticmethod
+    def registrar(tipo, mensaje):
+        """
+        Escribe una línea de evento indexada por tiempo en el archivo de logs.
+
+        Parameters
+      
+        tipo : str
+            Categoría o gravedad del evento (INFO, ERROR, WARNING).
+        mensaje : str
+            Descripción detallada del suceso.
+        """
+        # Captura la estampa de tiempo exacta del evento
+        fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        try:
+            # Se abre en modo append 'a' con codificación universal utf-8
+            with open(LOG_FILE, "a", encoding="utf-8") as archivo:
+                archivo.write(f"[{fecha}] [{tipo.upper()}] {mensaje}\n")
+        except OSError:
+          
+13)validaciones.py
+
+Contiene funciones para validar los datos ingresados por el usuario.
+"""
+
+import re
+
+# Corrección de ruta de importación: Ajustado según la jerarquía de carpetas del proyecto
+from exceptions.excepciones import (
+    CorreoInvalidoError,
+    TelefonoInvalidoError
+)
+
+class Validaciones:
+    """
+    Agrupa los métodos estáticos de validación de datos del sistema integral.
+    """
+
+    @staticmethod
+    def campo_vacio(texto):
+        """
+        Retorna True si el texto está vacío o contiene solo espacios en blanco.
+        Protegido contra valores nulos (None).
+        """
+        if texto is None:
+            return True
+        return str(texto).strip() == ""
+    
+    @staticmethod
+    def validar_telefono(telefono):
+        """
+        Verifica que el teléfono tenga exactamente diez dígitos numéricos.
+        Lanza TelefonoInvalidoError si no cumple el patrón.
+        """
+        patron = r"^\d{10}$"
+
+        # Asegura conversión a string y valida coincidencia exacta con el patrón
+        if not re.fullmatch(patron, str(telefono)):
+            raise TelefonoInvalidoError(
+                "El teléfono debe contener exactamente 10 dígitos."
+            )
+        return True
+
+    @staticmethod
+    def validar_correo(correo):
+        """
+        Verifica el formato del correo electrónico mediante expresiones regulares.
+        Lanza CorreoInvalidoError si el formato es erróneo.
+        """
+        patron = r"^[\w\.-]+@[\w\.-]+\.\w+$"
+
+        if not re.fullmatch(patron, str(correo)):
+            raise CorreoInvalidoError(
+                "El correo electrónico no tiene un formato válido."
+            )
+        return True
+    
+    @staticmethod
+    def validar_cedula(cedula):
+        """
+        Verifica que la cédula contenga únicamente números.
+        Protegido contra valores nulos o vacíos.
+        """
+        if not cedula:
+            return False
+        return str(cedula).isdigit()
+
+        Genera un código correlativo único para una nueva reserva (Ej: R001).
+        """
+        return GeneradorCodigos._generar_codigo(RESERVAS_FILE, "R")
